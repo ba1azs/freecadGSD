@@ -80,7 +80,25 @@ class CurvesWorkbench(Gui.Workbench):
         try:
             import importlib
             import sys
-            addon_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+
+            def _find_addon_root():
+                module_file = globals().get("__file__")
+                candidates = []
+                if module_file:
+                    candidates.append(os.path.abspath(os.path.join(os.path.dirname(module_file), "..", "..", "..")))
+                try:
+                    candidates.append(os.path.join(App.getUserAppDataDir(), "Mod", "freecadGSD"))
+                except Exception:
+                    pass
+                for path in sys.path:
+                    if path:
+                        candidates.append(path)
+                for candidate in candidates:
+                    if candidate and os.path.isdir(os.path.join(candidate, "Silk")):
+                        return os.path.abspath(candidate)
+                return os.path.abspath(os.getcwd())
+
+            addon_root = _find_addon_root()
             silk_dir = os.path.join(addon_root, "Silk")
             if silk_dir not in sys.path:
                 sys.path.insert(0, silk_dir)
