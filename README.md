@@ -2,6 +2,11 @@
 
 CATIA GSD-like curves and surface helpers for FreeCAD, based on Curves Workbench.
 
+
+## Bundled Silk tools
+
+This fork also vendors the GPL-3.0 Silk workbench from https://github.com/edwardvmills/Silk and registers its command set inside the `freecadGSD` workbench under the Silk toolbar/menu. Because Silk is GPL-3.0, redistributed combined builds of this fork should be treated as GPL-3.0-compatible. The vendored license text is kept in `LICENSE-SILK-GPL3`.
+
 ## Bundled GenSurf tools
 
 This fork vendors the LGPL-2.1 GenSurf workbench from https://github.com/rubert34/GenSurf and registers its full command set inside the `freecadGSD` workbench under the GenSurf/GS toolbars. The vendored license text is kept in `LICENSE-GENSURF`.
