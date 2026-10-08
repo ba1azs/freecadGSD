@@ -8,40 +8,30 @@ import traceback
 import FreeCAD as App
 
 
-def _candidate_roots():
-    """Return likely roots for manual FreeCAD Mod-folder loading.
-
-    Some FreeCAD/macOS command paths execute InitGui.py without defining
-    ``__file__``. Prefer the module file when available, then fall back to
-    FreeCAD's user app data Mod path and the process cwd.
-    """
-    module_file = globals().get("__file__")
-    if module_file:
-        yield os.path.dirname(os.path.abspath(module_file))
-    spec = globals().get("__spec__")
-    spec_origin = getattr(spec, "origin", None)
-    if spec_origin:
-        yield os.path.dirname(os.path.abspath(spec_origin))
-    try:
-        yield os.path.join(App.getUserAppDataDir(), "Mod", "freecadGSD")
-    except Exception:
-        pass
-    yield os.getcwd()
-
-
-def _find_root():
-    marker = os.path.join("freecad", "Curves", "init_gui.py")
-    for root in _candidate_roots():
-        if root and os.path.exists(os.path.join(root, marker)):
-            return os.path.abspath(root)
-    # Last-resort fallback keeps older behavior for unusual launchers.
-    module_file = globals().get("__file__")
-    if module_file:
-        return os.path.dirname(os.path.abspath(module_file))
-    return os.getcwd()
-
-
-ROOT = _find_root()
+# FreeCAD/macOS may execute InitGui.py without defining __file__, and some
+# startup paths have odd exec scopes. Keep this loader as simple top-level
+# code: no helper functions required before the import below.
+ROOT = None
+_MARKER = os.path.join("freecad", "Curves", "init_gui.py")
+_CANDIDATES = []
+_MODULE_FILE = globals().get("__file__")
+if _MODULE_FILE:
+    _CANDIDATES.append(os.path.dirname(os.path.abspath(_MODULE_FILE)))
+_SPEC = globals().get("__spec__")
+_SPEC_ORIGIN = getattr(_SPEC, "origin", None)
+if _SPEC_ORIGIN:
+    _CANDIDATES.append(os.path.dirname(os.path.abspath(_SPEC_ORIGIN)))
+try:
+    _CANDIDATES.append(os.path.join(App.getUserAppDataDir(), "Mod", "freecadGSD"))
+except Exception:
+    pass
+_CANDIDATES.append(os.getcwd())
+for _candidate in _CANDIDATES:
+    if _candidate and os.path.exists(os.path.join(_candidate, _MARKER)):
+        ROOT = os.path.abspath(_candidate)
+        break
+if ROOT is None:
+    ROOT = os.path.dirname(os.path.abspath(_MODULE_FILE)) if _MODULE_FILE else os.getcwd()
 PARENT = os.path.dirname(ROOT)
 FREECAD_DIR = os.path.join(ROOT, "freecad")
 
