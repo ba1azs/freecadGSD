@@ -1,21 +1,21 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no" ?>
 <package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
-  <name>Curves workbench</name>
-  <description>A collection of tools mainly dedicated to NURBS curves and surfaces modeling.</description>
+  <name>freecadGSD</name>
+  <description>CATIA GSD-like curves and surface helpers for FreeCAD, based on Curves Workbench.</description>
   <version>0.6.81</version>
   <date>2026-08-24</date>
   <author>Christophe Grellier</author>
-  <maintainer email="cg@grellier.fr">Christophe Grellier</maintainer>
+  <maintainer email="">Balazs / Ovadclaw</maintainer>
   <license file="LICENSE-CODE">LGPL-2.1-or-later</license>
   <license file="LICENSE-TIGL">Apache-2.0</license>
-  <url type="repository" branch="main">https://github.com/tomate44/CurvesWB</url>
-  <url type="documentation">https://wiki.freecad.org/Curves_Workbench</url>
+  <url type="repository" branch="main">https://github.com/airforce-io/freecadGSD</url>
+  <url type="documentation">https://github.com/airforce-io/freecadGSD</url>
 
   <content>
     <workbench>
-      <name>Curves workbench</name>
+      <name>freecadGSD</name>
       <classname>CurvesWorkbench</classname>
-      <description>A collection of tools mainly dedicated to NURBS curves and surfaces modeling.</description>
+      <description>CATIA GSD-like curves and surface helpers for FreeCAD, based on Curves Workbench.</description>
       <version>0.6.81</version>
       <subdirectory>./</subdirectory>
       <icon>freecad/Curves/resources/icons/blendSurf.svg</icon>
@@ -24,6 +24,8 @@
       <depend>scipy</depend>
       <tag>curves</tag>
       <tag>nurbs</tag>
+      <tag>gsd</tag>
+      <tag>surface</tag>
     </workbench>
   </content>
 

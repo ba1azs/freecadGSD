@@ -7,9 +7,9 @@ from . import ICONPATH
 
 
 class CurvesWorkbench(Gui.Workbench):
-    """FreeCAD workbench that offers a collection of tools mainly related to Nurbs curves and surfaces."""
-    MenuText = "Curves"
-    ToolTip = "a workbench dedicated to curves and surfaces"
+    """freecadGSD workbench: CATIA GSD-like curves and surface helpers for FreeCAD."""
+    MenuText = "freecadGSD"
+    ToolTip = "CATIA GSD-like curves and surface helpers for FreeCAD"
     Icon = os.path.join(ICONPATH, "blendSurf.svg")
     toolbox = []
 
@@ -88,11 +88,11 @@ class CurvesWorkbench(Gui.Workbench):
         misclist = ["GeomInfo", "extract", "solid", "pasteSVG", "to_console", "Curves_adjacent_faces",
                     "Curves_bspline_to_console"]
 
-        self.appendToolbar("Curves", curvelist)
+        self.appendToolbar("freecadGSD Curves", curvelist)
         self.appendToolbar("Surfaces", surflist)
         self.appendToolbar("SurfaceLab", surfacelablist)
         self.appendToolbar("Misc.", misclist)
-        self.appendMenu("Curves", curvelist)
+        self.appendMenu("freecadGSD", curvelist)
         self.appendMenu("Surfaces", surflist)
         self.appendMenu("SurfaceLab", surfacelablist)
         self.appendMenu("Misc.", misclist)

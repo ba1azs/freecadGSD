@@ -1,3 +1,7 @@
+# freecadGSD
+
+CATIA GSD-like curves and surface helpers for FreeCAD, based on Curves Workbench.
+
 ## FreeCAD Curves and Surfaces WorkBench 
 ![Curves Workbench](https://github.com/tomate44/CurvesWB/raw/main/docs/pics/CurvesWB.jpg)
 
