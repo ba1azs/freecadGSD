@@ -68,6 +68,7 @@ class CurvesWorkbench(Gui.Workbench):
         from . import WaterLineFP
         from . import MapOnFaceFP
         from . import joinSurfacesFP
+        from . import SurfaceLab
         # from . import ProfileSupportFP
         # from . import Sweep2RailsFP
         # from . import HQRuledSurfaceFP
@@ -82,15 +83,18 @@ class CurvesWorkbench(Gui.Workbench):
                     "profile", "pipeshell", "gordon", "segment_surface", "Curves_JoinSurface", "comp_spring",
                     "ReflectLines", "MultiLoft", "Curves_BlendSurf2", "Curves_BlendSolid",
                     "Curves_FlattenFace", "Curves_RotationSweep", 'Curves_SurfaceAnalysis',
-                    'Curves_DraftAnalysis', "Curve_TruncateExtendCmd", "Curves_WaterlineCurves",]  # ,"Curves_ProfileSupport", "Curves_Sweep2Rails"]
+                    'Curves_DraftAnalysis', "Curve_TruncateExtendCmd", "Curves_WaterlineCurves",]
+        surfacelablist = ["SurfaceLab_BSplineFromPoints", "SurfaceLab_LoftSurface", "SurfaceLab_BoundarySurface"]  # ,"Curves_ProfileSupport", "Curves_Sweep2Rails"]
         misclist = ["GeomInfo", "extract", "solid", "pasteSVG", "to_console", "Curves_adjacent_faces",
                     "Curves_bspline_to_console"]
 
         self.appendToolbar("Curves", curvelist)
         self.appendToolbar("Surfaces", surflist)
+        self.appendToolbar("SurfaceLab", surfacelablist)
         self.appendToolbar("Misc.", misclist)
         self.appendMenu("Curves", curvelist)
         self.appendMenu("Surfaces", surflist)
+        self.appendMenu("SurfaceLab", surfacelablist)
         self.appendMenu("Misc.", misclist)
 
     def Activated(self):
