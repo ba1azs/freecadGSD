@@ -69,6 +69,13 @@ class CurvesWorkbench(Gui.Workbench):
         from . import MapOnFaceFP
         from . import joinSurfacesFP
         from . import SurfaceLab
+        try:
+            from gensurf.ui import commands as gensurf_commands, observers as gensurf_observers
+            self.__class__._gensurf_commands = gensurf_commands.register_all()
+            gensurf_observers.install()
+        except Exception as exc:
+            App.Console.PrintError("freecadGSD: GenSurf command registration failed: {}\n".format(exc))
+            gensurf_commands = None
         # from . import ProfileSupportFP
         # from . import Sweep2RailsFP
         # from . import HQRuledSurfaceFP
@@ -91,10 +98,15 @@ class CurvesWorkbench(Gui.Workbench):
         self.appendToolbar("freecadGSD Curves", curvelist)
         self.appendToolbar("Surfaces", surflist)
         self.appendToolbar("SurfaceLab", surfacelablist)
+        if gensurf_commands is not None:
+            for title, items in gensurf_commands.TOOLBARS:
+                self.appendToolbar(title, items)
         self.appendToolbar("Misc.", misclist)
         self.appendMenu("freecadGSD", curvelist)
         self.appendMenu("Surfaces", surflist)
         self.appendMenu("SurfaceLab", surfacelablist)
+        if gensurf_commands is not None:
+            self.appendMenu("GenSurf", gensurf_commands.MENU)
         self.appendMenu("Misc.", misclist)
 
     def Activated(self):
@@ -104,6 +116,11 @@ class CurvesWorkbench(Gui.Workbench):
             self.Selection = []
             self.View_Directions = []
             Gui.Selection.addObserver(self)
+        try:
+            from gensurf.ui.view_provider import ensure_view_providers
+            ensure_view_providers(App.ActiveDocument)
+        except Exception as exc:
+            App.Console.PrintWarning("freecadGSD: GenSurf view-provider activation skipped: {}\n".format(exc))
         return
 
     def Deactivated(self):

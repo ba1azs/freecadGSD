@@ -2,6 +2,10 @@
 
 CATIA GSD-like curves and surface helpers for FreeCAD, based on Curves Workbench.
 
+## Bundled GenSurf tools
+
+This fork vendors the LGPL-2.1 GenSurf workbench from https://github.com/rubert34/GenSurf and registers its full command set inside the `freecadGSD` workbench under the GenSurf/GS toolbars. The vendored license text is kept in `LICENSE-GENSURF`.
+
 ## FreeCAD Curves and Surfaces WorkBench 
 ![Curves Workbench](https://github.com/tomate44/CurvesWB/raw/main/docs/pics/CurvesWB.jpg)
 
