@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <defs><linearGradient id="plane" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffe27a"/><stop offset="1" stop-color="#d99800"/></linearGradient></defs>
+  <path d="M8 29 L21 11 L42 16 L29 35 Z" fill="url(#plane)" stroke="#704900" stroke-width="1.7"/>
+  <path d="M24 48 L37 30 L58 35 L45 55 Z" fill="url(#plane)" stroke="#704900" stroke-width="1.7" opacity="0.95"/>
+  <path d="M18 25 L35 21" stroke="#e51b23" stroke-width="4" stroke-linecap="round"/>
+  <path d="M18 25 L14 38" stroke="#13a538" stroke-width="4" stroke-linecap="round"/>
+  <path d="M35 45 L52 41" stroke="#e51b23" stroke-width="4" stroke-linecap="round"/>
+  <path d="M35 45 L31 58" stroke="#13a538" stroke-width="4" stroke-linecap="round"/>
+  <path d="M25 24 C33 18 45 21 48 30" fill="none" stroke="#1c4fc4" stroke-width="4" stroke-linecap="round"/>
+  <path d="M47 24 L50 34 L40 31 Z" fill="#1c4fc4"/>
+  <path d="M47 42 C39 48 27 45 24 36" fill="none" stroke="#1c4fc4" stroke-width="4" stroke-linecap="round"/>
+  <path d="M25 42 L22 32 L32 35 Z" fill="#1c4fc4"/>
+</svg>

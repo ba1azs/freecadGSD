@@ -20,6 +20,10 @@ import Part
 from freecad.Curves import ICONPATH
 
 TOOL_ICON = os.path.join(ICONPATH, "blendSurf.svg")
+POSITIONED_SKETCH_ICON = os.path.join(ICONPATH, "surfacelab_positioned_sketch.svg")
+LINKED_POSITIONED_SKETCH_ICON = os.path.join(ICONPATH, "surfacelab_linked_positioned_sketch.svg")
+MANAGE_LINKED_SKETCH_ICON = os.path.join(ICONPATH, "surfacelab_manage_linked_sketch.svg")
+SYNC_LINKED_SKETCH_ICON = os.path.join(ICONPATH, "surfacelab_sync_linked_sketches.svg")
 
 
 def _active_doc():
@@ -852,7 +856,7 @@ class SurfaceLabPositionedSketchCommand:
 
     def GetResources(self):
         return {
-            'Pixmap': TOOL_ICON,
+            'Pixmap': POSITIONED_SKETCH_ICON,
             'MenuText': self.title,
             'ToolTip': "{}<br><br><b>Usage :</b><br>{}".format(self.doc, self.usage),
         }
@@ -1225,7 +1229,7 @@ class SurfaceLabManageLinkedPositionedSketchCommand:
         return FreeCAD.ActiveDocument is not None
 
     def GetResources(self):
-        return {'Pixmap': TOOL_ICON, 'MenuText': self.title, 'ToolTip': "{}<br><br><b>Usage :</b><br>{}".format(self.doc, self.usage)}
+        return {'Pixmap': MANAGE_LINKED_SKETCH_ICON, 'MenuText': self.title, 'ToolTip': "{}<br><br><b>Usage :</b><br>{}".format(self.doc, self.usage)}
 
 
 class SurfaceLabCreateLinkedPositionedSketchCommand:
@@ -1263,7 +1267,7 @@ class SurfaceLabCreateLinkedPositionedSketchCommand:
         return FreeCAD.ActiveDocument is not None
 
     def GetResources(self):
-        return {'Pixmap': TOOL_ICON, 'MenuText': self.title, 'ToolTip': "{}<br><br><b>Usage :</b><br>{}".format(self.doc, self.usage)}
+        return {'Pixmap': LINKED_POSITIONED_SKETCH_ICON, 'MenuText': self.title, 'ToolTip': "{}<br><br><b>Usage :</b><br>{}".format(self.doc, self.usage)}
 
 
 class SurfaceLabSyncLinkedPositionedSketchesCommand:
@@ -1281,7 +1285,7 @@ class SurfaceLabSyncLinkedPositionedSketchesCommand:
         return FreeCAD.ActiveDocument is not None
 
     def GetResources(self):
-        return {'Pixmap': TOOL_ICON, 'MenuText': self.title, 'ToolTip': "{}<br><br><b>Usage :</b><br>{}".format(self.doc, self.usage)}
+        return {'Pixmap': SYNC_LINKED_SKETCH_ICON, 'MenuText': self.title, 'ToolTip': "{}<br><br><b>Usage :</b><br>{}".format(self.doc, self.usage)}
 
 
 FreeCADGui.addCommand('SurfaceLab_BSplineFromPoints', SurfaceLabBSplineFromPointsCommand())
