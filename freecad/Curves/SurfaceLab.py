@@ -421,6 +421,9 @@ def _create_positioned_sketch(
     return sketch, x_axis, y_axis, z_axis
 
 
+_SURFACELAB_POSITIONED_SKETCH_DIALOG = None
+
+
 class _PositionedSketchDialog:
     """Small CATIA-like Sketch Positioning popup."""
 
@@ -433,6 +436,7 @@ class _PositionedSketchDialog:
         self.line_direction = None
         self.v_direction = None
         self.plane_normal = None
+        self.pick_mode = None
         if self.sketch is not None:
             self.origin, self.line_direction, self.v_direction, self.plane_normal = _placement_axes(self.sketch)
         self._build()
@@ -440,6 +444,10 @@ class _PositionedSketchDialog:
             self.read_selection()
         else:
             self.update_labels()
+        try:
+            FreeCADGui.Selection.addObserver(self)
+        except Exception:
+            pass
 
     def _qt_modules(self):
         try:
@@ -453,6 +461,10 @@ class _PositionedSketchDialog:
         self.QtCore, self.QtGui, self.QtWidgets = self._qt_modules()
         self.dialog = self.QtWidgets.QDialog()
         self.dialog.setWindowTitle("Edit Positioned Sketch" if self.sketch is not None else "Positioned Sketch")
+        try:
+            self.dialog.setModal(False)
+        except Exception:
+            pass
         layout = self.QtWidgets.QVBoxLayout(self.dialog)
 
         info = self.QtWidgets.QLabel(
@@ -471,9 +483,26 @@ class _PositionedSketchDialog:
         form.addRow("Orientation H", self.direction_label)
         layout.addLayout(form)
 
+        pick_group = self.QtWidgets.QGroupBox("Pick after click")
+        pick_layout = self.QtWidgets.QVBoxLayout(pick_group)
+        self.pick_status = self.QtWidgets.QLabel("Click a pick button, then select geometry in the 3D view/tree.")
+        self.pick_status.setWordWrap(True)
+        pick_layout.addWidget(self.pick_status)
+        pick_buttons = self.QtWidgets.QHBoxLayout()
+        self.pick_support_btn = self.QtWidgets.QPushButton("Pick support")
+        self.pick_origin_btn = self.QtWidgets.QPushButton("Pick origin")
+        self.pick_h_btn = self.QtWidgets.QPushButton("Pick H direction")
+        self.pick_support_btn.clicked.connect(lambda: self.arm_pick("support"))
+        self.pick_origin_btn.clicked.connect(lambda: self.arm_pick("origin"))
+        self.pick_h_btn.clicked.connect(lambda: self.arm_pick("h"))
+        pick_buttons.addWidget(self.pick_support_btn)
+        pick_buttons.addWidget(self.pick_origin_btn)
+        pick_buttons.addWidget(self.pick_h_btn)
+        pick_layout.addLayout(pick_buttons)
         read_btn = self.QtWidgets.QPushButton("Read current selection")
         read_btn.clicked.connect(self.read_selection)
-        layout.addWidget(read_btn)
+        pick_layout.addWidget(read_btn)
+        layout.addWidget(pick_group)
 
         options = self.QtWidgets.QGroupBox("Orientation")
         option_layout = self.QtWidgets.QVBoxLayout(options)
@@ -486,8 +515,8 @@ class _PositionedSketchDialog:
         layout.addWidget(options)
 
         hint = self.QtWidgets.QLabel(
-            "Tip: select one face/plane, one point/vertex, and one edge/line before opening, "
-            "or change selection and press Read current selection."
+            "Tip: for CATIA-like workflow, click Pick support / Pick origin / Pick H direction first, "
+            "then select the needed geometry. You can still preselect all three and press Read current selection."
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -496,8 +525,95 @@ class _PositionedSketchDialog:
             self.QtWidgets.QDialogButtonBox.Ok | self.QtWidgets.QDialogButtonBox.Cancel
         )
         buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.dialog.reject)
+        buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        try:
+            self.dialog.finished.connect(lambda _code: self.cleanup())
+        except Exception:
+            pass
+
+    def arm_pick(self, mode):
+        self.pick_mode = mode
+        labels = {
+            "support": "Now select a planar face/plane for the sketch support.",
+            "origin": "Now select a vertex/point for the sketch origin.",
+            "h": "Now select an edge/line for the horizontal H direction.",
+        }
+        self.pick_status.setText(labels.get(mode, "Select geometry."))
+
+    def _selection_event_shape(self, doc_name, obj_name, sub_name):
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+            obj = doc.getObject(obj_name)
+            if obj is None:
+                return None, "", None
+            if sub_name:
+                shape = obj.getSubObject(sub_name)
+            elif hasattr(obj, "Shape"):
+                shape = obj.Shape
+            else:
+                shape = None
+            return obj, sub_name or "", shape
+        except Exception:
+            return None, "", None
+
+    def _apply_pick(self, owner, path, shape):
+        if self.pick_mode == "support":
+            normal = _plane_normal(shape)
+            if normal is None:
+                self.pick_status.setText("That is not a planar face/plane. Pick support again.")
+                return
+            self.face_owner = owner
+            self.face_path = path
+            self.plane_normal = normal
+            self.pick_status.setText("Support selected. Now pick origin or H direction.")
+        elif self.pick_mode == "origin":
+            point = _point_from_shape(shape)
+            if point is None:
+                self.pick_status.setText("That is not a point/vertex. Pick origin again.")
+                return
+            self.origin = point
+            self.pick_status.setText("Origin selected. Now pick support or H direction.")
+        elif self.pick_mode == "h":
+            if getattr(shape, "ShapeType", None) != "Edge":
+                self.pick_status.setText("That is not an edge/line. Pick H direction again.")
+                return
+            direction = _edge_direction(shape)
+            if direction is None:
+                self.pick_status.setText("Could not read edge direction. Pick H direction again.")
+                return
+            self.line_direction = direction
+            self.v_direction = None
+            self.pick_status.setText("H direction selected. Press OK or continue picking.")
+        else:
+            return
+        self.pick_mode = None
+        self.update_labels()
+
+    def addSelection(self, doc, obj, sub, pnt):
+        if self.pick_mode is None:
+            return
+        owner, path, shape = self._selection_event_shape(doc, obj, sub)
+        if shape is not None:
+            self._apply_pick(owner, path, shape)
+
+    def cleanup(self):
+        try:
+            FreeCADGui.Selection.removeObserver(self)
+        except Exception:
+            pass
+
+    def reject(self):
+        self.cleanup()
+        self.dialog.reject()
+
+    def show(self):
+        self.dialog.show()
+        try:
+            self.dialog.raise_()
+            self.dialog.activateWindow()
+        except Exception:
+            pass
 
     def update_labels(self):
         if self.plane_normal is None:
@@ -560,10 +676,12 @@ class _PositionedSketchDialog:
         except Exception:
             pass
         _message(("Updated" if self.sketch is not None else "Created") + " positioned sketch from popup.")
+        self.cleanup()
         self.dialog.accept()
 
     def exec_(self):
-        return self.dialog.exec_()
+        self.show()
+        return 0
 
 
 class SurfaceLabPositionedSketchCommand:
@@ -579,8 +697,14 @@ class SurfaceLabPositionedSketchCommand:
     def Activated(self):
         if getattr(FreeCAD, "GuiUp", False):
             try:
-                dialog = _PositionedSketchDialog(self, _selected_positioned_sketch())
-                dialog.exec_()
+                global _SURFACELAB_POSITIONED_SKETCH_DIALOG
+                if _SURFACELAB_POSITIONED_SKETCH_DIALOG is not None:
+                    try:
+                        _SURFACELAB_POSITIONED_SKETCH_DIALOG.cleanup()
+                    except Exception:
+                        pass
+                _SURFACELAB_POSITIONED_SKETCH_DIALOG = _PositionedSketchDialog(self, _selected_positioned_sketch())
+                _SURFACELAB_POSITIONED_SKETCH_DIALOG.show()
                 return
             except Exception as exc:
                 FreeCAD.Console.PrintWarning("SurfaceLab positioned sketch popup unavailable, using direct mode: {}\n".format(exc))
