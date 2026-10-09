@@ -488,7 +488,7 @@ class _PositionedSketchDialog:
 
         pick_group = self.QtWidgets.QGroupBox("Pick after click")
         pick_layout = self.QtWidgets.QVBoxLayout(pick_group)
-        self.pick_status = self.QtWidgets.QLabel("Click a pick button, then select geometry in the 3D view/tree.")
+        self.pick_status = self.QtWidgets.QLabel("Select a plane, point, or line directly; or use pick buttons to force one input type.")
         self.pick_status.setWordWrap(True)
         pick_layout.addWidget(self.pick_status)
         pick_buttons = self.QtWidgets.QHBoxLayout()
@@ -523,8 +523,8 @@ class _PositionedSketchDialog:
         layout.addWidget(options)
 
         hint = self.QtWidgets.QLabel(
-            "Tip: for CATIA-like workflow, click Pick support / Pick origin / Pick H direction first, "
-            "then select the needed geometry. You can still preselect all three and press Read current selection."
+            "Tip: you can simply select geometry: planar face/plane = Support, vertex/point = Origin, edge/line = H direction. "
+            "Use Pick support / Pick origin / Pick H direction only when you want to force the next selection type."
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -565,6 +565,45 @@ class _PositionedSketchDialog:
         except Exception:
             return None, "", None
 
+    def _apply_auto_pick(self, owner, path, shape):
+        shape_type = getattr(shape, "ShapeType", None)
+        if shape_type == "Face":
+            normal = _plane_normal(shape)
+            if normal is not None:
+                self.face_owner = owner
+                self.face_path = path
+                self.plane_normal = normal
+                self.pick_status.setText("Support selected automatically. Select point/origin or H line next.")
+                self.update_labels()
+                self.update_preview()
+                return True
+        if shape_type == "Vertex":
+            point = _point_from_shape(shape)
+            if point is not None:
+                self.origin = point
+                self.pick_status.setText("Origin selected automatically. Select support plane or H line next.")
+                self.update_labels()
+                self.update_preview()
+                return True
+        if shape_type == "Edge":
+            direction = _edge_direction(shape)
+            if direction is not None:
+                self.line_direction = direction
+                self.v_direction = None
+                self.pick_status.setText("H direction selected automatically. Press OK or continue selecting.")
+                self.update_labels()
+                self.update_preview()
+                return True
+        point = _point_from_shape(shape)
+        if point is not None:
+            self.origin = point
+            self.pick_status.setText("Origin selected automatically. Select support plane or H line next.")
+            self.update_labels()
+            self.update_preview()
+            return True
+        self.pick_status.setText("Selection not recognized as plane, point, or line.")
+        return False
+
     def _apply_pick(self, owner, path, shape):
         if self.pick_mode == "support":
             normal = _plane_normal(shape)
@@ -600,10 +639,12 @@ class _PositionedSketchDialog:
         self.update_preview()
 
     def addSelection(self, doc, obj, sub, pnt):
-        if self.pick_mode is None:
-            return
         owner, path, shape = self._selection_event_shape(doc, obj, sub)
-        if shape is not None:
+        if shape is None:
+            return
+        if self.pick_mode is None:
+            self._apply_auto_pick(owner, path, shape)
+        else:
             self._apply_pick(owner, path, shape)
 
     def _clear_preview(self):
