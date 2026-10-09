@@ -940,6 +940,11 @@ def _copy_sketch_contents(source, target):
             FreeCAD.Console.PrintWarning("SurfaceLab: skipped linked sketch constraint {}: {}\n".format(constraint, exc))
 
     target.Placement = source.Placement
+    try:
+        source_label = getattr(source, "Label", getattr(source, "Name", "PositionedSketch"))
+        target.Label = "Linked " + source_label
+    except Exception:
+        pass
     for name in ("SurfaceLabHDirection", "SurfaceLabVDirection", "SurfaceLabNormal", "SurfaceLabPositioning"):
         try:
             if hasattr(source, name):
