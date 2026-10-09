@@ -437,6 +437,8 @@ class _PositionedSketchDialog:
         self.v_direction = None
         self.plane_normal = None
         self.pick_mode = None
+        self.preview_objects = []
+        self.preview_length = 20.0
         if self.sketch is not None:
             self.origin, self.line_direction, self.v_direction, self.plane_normal = _placement_axes(self.sketch)
         self._build()
@@ -444,6 +446,7 @@ class _PositionedSketchDialog:
             self.read_selection()
         else:
             self.update_labels()
+            self.update_preview()
         try:
             FreeCADGui.Selection.addObserver(self)
         except Exception:
@@ -509,6 +512,11 @@ class _PositionedSketchDialog:
         self.reverse_h = self.QtWidgets.QCheckBox("Reverse H direction")
         self.reverse_v = self.QtWidgets.QCheckBox("Reverse V direction")
         self.swap_hv = self.QtWidgets.QCheckBox("Swap H and V")
+        for checkbox in (self.reverse_h, self.reverse_v, self.swap_hv):
+            try:
+                checkbox.stateChanged.connect(lambda _state: self.update_preview())
+            except Exception:
+                pass
         option_layout.addWidget(self.reverse_h)
         option_layout.addWidget(self.reverse_v)
         option_layout.addWidget(self.swap_hv)
@@ -589,6 +597,7 @@ class _PositionedSketchDialog:
             return
         self.pick_mode = None
         self.update_labels()
+        self.update_preview()
 
     def addSelection(self, doc, obj, sub, pnt):
         if self.pick_mode is None:
@@ -597,7 +606,77 @@ class _PositionedSketchDialog:
         if shape is not None:
             self._apply_pick(owner, path, shape)
 
+    def _clear_preview(self):
+        for obj in list(getattr(self, "preview_objects", [])):
+            try:
+                if obj.Document is not None:
+                    obj.Document.removeObject(obj.Name)
+            except Exception:
+                pass
+        self.preview_objects = []
+
+    def update_preview(self):
+        self._clear_preview()
+        if self.origin is None or self.line_direction is None or self.plane_normal is None:
+            return
+        try:
+            doc = _active_doc()
+            # Reuse the same math as final creation, but create no sketch.
+            z_axis = FreeCAD.Vector(self.plane_normal)
+            if z_axis.Length <= 1e-9:
+                return
+            z_axis.normalize()
+            x_axis = FreeCAD.Vector(self.line_direction)
+            x_axis = x_axis - FreeCAD.Vector(z_axis).multiply(x_axis.dot(z_axis))
+            if x_axis.Length <= 1e-9:
+                return
+            x_axis.normalize()
+            if self.v_direction is None:
+                y_axis = z_axis.cross(x_axis)
+            else:
+                y_axis = FreeCAD.Vector(self.v_direction)
+                y_axis = y_axis - FreeCAD.Vector(z_axis).multiply(y_axis.dot(z_axis))
+                y_axis = y_axis - FreeCAD.Vector(x_axis).multiply(y_axis.dot(x_axis))
+            if y_axis.Length <= 1e-9:
+                return
+            y_axis.normalize()
+            x_axis = y_axis.cross(z_axis)
+            if x_axis.dot(self.line_direction) < 0:
+                x_axis = x_axis.multiply(-1.0)
+                y_axis = y_axis.multiply(-1.0)
+            x_axis.normalize()
+            if self.reverse_h.isChecked():
+                x_axis = x_axis.multiply(-1.0)
+            if self.reverse_v.isChecked():
+                y_axis = y_axis.multiply(-1.0)
+            if self.swap_hv.isChecked():
+                x_axis, y_axis = y_axis, x_axis
+
+            length = max(float(getattr(self, "preview_length", 20.0)), 1.0)
+            h_obj = doc.addObject("Part::Feature", "PositionedSketchPreview_H")
+            h_obj.Label = "H axis preview"
+            h_obj.Shape = Part.makeLine(self.origin, self.origin + x_axis.multiply(length))
+            v_obj = doc.addObject("Part::Feature", "PositionedSketchPreview_V")
+            v_obj.Label = "V axis preview"
+            v_obj.Shape = Part.makeLine(self.origin, self.origin + y_axis.multiply(length))
+            try:
+                h_obj.ViewObject.LineColor = (1.0, 0.0, 0.0)
+                h_obj.ViewObject.LineWidth = 4.0
+                v_obj.ViewObject.LineColor = (0.0, 0.8, 0.0)
+                v_obj.ViewObject.LineWidth = 4.0
+            except Exception:
+                pass
+            self.preview_objects = [h_obj, v_obj]
+            doc.recompute()
+            self.pick_status.setText("Preview shown: red = H, green = V. Press OK or continue picking.")
+        except Exception as exc:
+            try:
+                self.pick_status.setText("Could not show H/V preview: {}".format(exc))
+            except Exception:
+                pass
+
     def cleanup(self):
+        self._clear_preview()
         try:
             FreeCADGui.Selection.removeObserver(self)
         except Exception:
@@ -646,6 +725,7 @@ class _PositionedSketchDialog:
             self.line_direction = line_direction
             self.v_direction = None
         self.update_labels()
+        self.update_preview()
 
     def accept(self):
         if self.origin is None or self.line_direction is None or self.plane_normal is None:
