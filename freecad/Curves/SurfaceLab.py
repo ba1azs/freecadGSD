@@ -309,6 +309,196 @@ def _make_rotation_from_axes(x_axis, y_axis, z_axis):
         return FreeCAD.Placement(matrix).Rotation
 
 
+def _object_label(owner, path):
+    label = getattr(owner, "Label", None) or getattr(owner, "Name", "Selection")
+    if path:
+        return "{}.{}".format(label, path)
+    return label
+
+
+def _create_positioned_sketch(doc, origin, line_direction, plane_normal, reverse_h=False, reverse_v=False, swap_hv=False):
+    z_axis = FreeCAD.Vector(plane_normal)
+    if z_axis.Length <= 1e-9:
+        raise ValueError("plane normal is zero")
+    z_axis.normalize()
+
+    # CATIA's H direction is constrained parallel to the selected line. If the
+    # selected line is not exactly on the plane, use its projection onto the
+    # sketch plane so local X lies in the sketch plane.
+    x_axis = FreeCAD.Vector(line_direction)
+    x_axis = x_axis - FreeCAD.Vector(z_axis).multiply(x_axis.dot(z_axis))
+    if x_axis.Length <= 1e-9:
+        raise ValueError("selected line is normal to the plane, so it cannot define H/X")
+    x_axis.normalize()
+
+    y_axis = z_axis.cross(x_axis)
+    if y_axis.Length <= 1e-9:
+        raise ValueError("could not compute V/Y axis")
+    y_axis.normalize()
+    x_axis = y_axis.cross(z_axis)
+    x_axis.normalize()
+
+    if reverse_h:
+        x_axis = x_axis.multiply(-1.0)
+    if reverse_v:
+        y_axis = y_axis.multiply(-1.0)
+    if swap_hv:
+        x_axis, y_axis = y_axis, x_axis
+
+    # Keep the basis orthogonal. If a single direction was reversed or H/V were
+    # swapped, this deliberately flips the sketch side like CATIA's reverse
+    # direction controls can do.
+    z_axis = x_axis.cross(y_axis)
+    if z_axis.Length <= 1e-9:
+        raise ValueError("invalid H/V orientation")
+    z_axis.normalize()
+    y_axis = z_axis.cross(x_axis)
+    y_axis.normalize()
+
+    try:
+        sketch = doc.addObject("Sketcher::SketchObject", "PositionedSketch")
+    except Exception as exc:
+        raise RuntimeError("could not create Sketcher::SketchObject: {}".format(exc))
+
+    sketch.Placement = FreeCAD.Placement(origin, _make_rotation_from_axes(x_axis, y_axis, z_axis))
+    try:
+        sketch.addProperty("App::PropertyString", "SurfaceLabPositioning", "SurfaceLab", "CATIA-like positioned sketch reference summary")
+        sketch.SurfaceLabPositioning = "Origin from selected point; H/X parallel to selected line projected onto selected plane."
+    except Exception:
+        pass
+    try:
+        sketch.addProperty("App::PropertyVector", "SurfaceLabHDirection", "SurfaceLab", "World H/X direction used at creation")
+        sketch.SurfaceLabHDirection = x_axis
+        sketch.addProperty("App::PropertyVector", "SurfaceLabVDirection", "SurfaceLab", "World V/Y direction used at creation")
+        sketch.SurfaceLabVDirection = y_axis
+        sketch.addProperty("App::PropertyVector", "SurfaceLabNormal", "SurfaceLab", "World sketch plane normal used at creation")
+        sketch.SurfaceLabNormal = z_axis
+    except Exception:
+        pass
+    return sketch, x_axis, y_axis, z_axis
+
+
+class _PositionedSketchDialog:
+    """Small CATIA-like Sketch Positioning popup."""
+
+    def __init__(self, command):
+        self.command = command
+        self.face_owner = None
+        self.face_path = ""
+        self.origin = None
+        self.line_direction = None
+        self.plane_normal = None
+        self._build()
+        self.read_selection()
+
+    def _qt_modules(self):
+        try:
+            from PySide import QtCore, QtGui
+            return QtCore, QtGui, QtGui
+        except Exception:
+            from PySide2 import QtCore, QtWidgets
+            return QtCore, QtWidgets, QtWidgets
+
+    def _build(self):
+        self.QtCore, self.QtGui, self.QtWidgets = self._qt_modules()
+        self.dialog = self.QtWidgets.QDialog()
+        self.dialog.setWindowTitle("Positioned Sketch")
+        layout = self.QtWidgets.QVBoxLayout(self.dialog)
+
+        info = self.QtWidgets.QLabel(
+            "Create a CATIA-like positioned sketch: choose support plane, origin, and H direction."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        form = self.QtWidgets.QFormLayout()
+        self.support_label = self.QtWidgets.QLabel("not selected")
+        self.origin_label = self.QtWidgets.QLabel("not selected")
+        self.direction_label = self.QtWidgets.QLabel("not selected")
+        form.addRow("Support / plane", self.support_label)
+        form.addRow("Origin", self.origin_label)
+        form.addRow("Orientation H", self.direction_label)
+        layout.addLayout(form)
+
+        read_btn = self.QtWidgets.QPushButton("Read current selection")
+        read_btn.clicked.connect(self.read_selection)
+        layout.addWidget(read_btn)
+
+        options = self.QtWidgets.QGroupBox("Orientation")
+        option_layout = self.QtWidgets.QVBoxLayout(options)
+        self.reverse_h = self.QtWidgets.QCheckBox("Reverse H direction")
+        self.reverse_v = self.QtWidgets.QCheckBox("Reverse V direction")
+        self.swap_hv = self.QtWidgets.QCheckBox("Swap H and V")
+        option_layout.addWidget(self.reverse_h)
+        option_layout.addWidget(self.reverse_v)
+        option_layout.addWidget(self.swap_hv)
+        layout.addWidget(options)
+
+        hint = self.QtWidgets.QLabel(
+            "Tip: select one face/plane, one point/vertex, and one edge/line before opening, "
+            "or change selection and press Read current selection."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        buttons = self.QtWidgets.QDialogButtonBox(
+            self.QtWidgets.QDialogButtonBox.Ok | self.QtWidgets.QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.dialog.reject)
+        layout.addWidget(buttons)
+
+    def read_selection(self):
+        self.face_owner, self.face_path, self.origin, self.line_direction, self.plane_normal = _first_positioned_sketch_inputs()
+        if self.plane_normal is None:
+            self.support_label.setText("not selected")
+        else:
+            self.support_label.setText(_object_label(self.face_owner, self.face_path))
+        if self.origin is None:
+            self.origin_label.setText("not selected")
+        else:
+            self.origin_label.setText("{:.3f}, {:.3f}, {:.3f}".format(self.origin.x, self.origin.y, self.origin.z))
+        if self.line_direction is None:
+            self.direction_label.setText("not selected")
+        else:
+            direction = FreeCAD.Vector(self.line_direction)
+            if direction.Length > 1e-9:
+                direction.normalize()
+            self.direction_label.setText("H parallel to {:.3f}, {:.3f}, {:.3f}".format(direction.x, direction.y, direction.z))
+
+    def accept(self):
+        if self.origin is None or self.line_direction is None or self.plane_normal is None:
+            self.QtWidgets.QMessageBox.warning(
+                self.dialog,
+                "Positioned Sketch",
+                "Select one planar face/plane, one vertex/point for Origin, and one edge/line for H direction."
+            )
+            return
+        try:
+            sketch, x_axis, y_axis, z_axis = _create_positioned_sketch(
+                _active_doc(),
+                self.origin,
+                self.line_direction,
+                self.plane_normal,
+                self.reverse_h.isChecked(),
+                self.reverse_v.isChecked(),
+                self.swap_hv.isChecked(),
+            )
+        except Exception as exc:
+            self.QtWidgets.QMessageBox.critical(self.dialog, "Positioned Sketch", str(exc))
+            return
+        FreeCAD.ActiveDocument.recompute()
+        try:
+            FreeCADGui.ActiveDocument.setEdit(sketch.Name)
+        except Exception:
+            pass
+        _message("Created positioned sketch from popup.")
+        self.dialog.accept()
+
+    def exec_(self):
+        return self.dialog.exec_()
+
+
 class SurfaceLabPositionedSketchCommand:
     """Create a CATIA-like positioned sketch from a plane, point, and line."""
 
@@ -316,63 +506,28 @@ class SurfaceLabPositionedSketchCommand:
     doc = "Create a sketch whose origin is a selected point and whose horizontal H/X axis follows a selected line on a selected plane."
     usage = (
         "Select one planar face/plane, one vertex/point for the origin, and one edge/line for the H/X direction, "
-        "then run the command. The line direction is projected onto the plane."
+        "then run the command. A CATIA-like positioning popup opens."
     )
 
     def Activated(self):
+        if getattr(FreeCAD, "GuiUp", False):
+            try:
+                dialog = _PositionedSketchDialog(self)
+                dialog.exec_()
+                return
+            except Exception as exc:
+                FreeCAD.Console.PrintWarning("SurfaceLab positioned sketch popup unavailable, using direct mode: {}\n".format(exc))
+
         doc = _active_doc()
         face_owner, face_path, origin, line_direction, plane_normal = _first_positioned_sketch_inputs()
         if origin is None or line_direction is None or plane_normal is None:
             _error(self.title, self.usage)
             return
-
-        z_axis = FreeCAD.Vector(plane_normal)
-        if z_axis.Length <= 1e-9:
-            FreeCAD.Console.PrintError("SurfaceLab positioned sketch failed: plane normal is zero.\n")
-            return
-        z_axis.normalize()
-
-        # CATIA's H direction is constrained parallel to the selected line. If
-        # the selected line is not exactly on the plane, use its projection onto
-        # the sketch plane so local X lies in the sketch plane.
-        x_axis = FreeCAD.Vector(line_direction)
-        x_axis = x_axis - z_axis.multiply(x_axis.dot(z_axis))
-        if x_axis.Length <= 1e-9:
-            FreeCAD.Console.PrintError("SurfaceLab positioned sketch failed: selected line is normal to the plane, so it cannot define H/X.\n")
-            return
-        x_axis.normalize()
-
-        y_axis = z_axis.cross(x_axis)
-        if y_axis.Length <= 1e-9:
-            FreeCAD.Console.PrintError("SurfaceLab positioned sketch failed: could not compute V/Y axis.\n")
-            return
-        y_axis.normalize()
-        # Recompute X to keep an orthonormal right-handed basis after numeric projection.
-        x_axis = y_axis.cross(z_axis)
-        x_axis.normalize()
-
         try:
-            sketch = doc.addObject("Sketcher::SketchObject", "PositionedSketch")
+            sketch, x_axis, y_axis, z_axis = _create_positioned_sketch(doc, origin, line_direction, plane_normal)
         except Exception as exc:
-            FreeCAD.Console.PrintError("SurfaceLab positioned sketch failed: could not create Sketcher::SketchObject: {}\n".format(exc))
+            FreeCAD.Console.PrintError("SurfaceLab positioned sketch failed: {}\n".format(exc))
             return
-
-        sketch.Placement = FreeCAD.Placement(origin, _make_rotation_from_axes(x_axis, y_axis, z_axis))
-        try:
-            sketch.addProperty("App::PropertyString", "SurfaceLabPositioning", "SurfaceLab", "CATIA-like positioned sketch reference summary")
-            sketch.SurfaceLabPositioning = "Origin from selected point; H/X parallel to selected line projected onto selected plane."
-        except Exception:
-            pass
-        try:
-            sketch.addProperty("App::PropertyVector", "SurfaceLabHDirection", "SurfaceLab", "World H/X direction used at creation")
-            sketch.SurfaceLabHDirection = x_axis
-            sketch.addProperty("App::PropertyVector", "SurfaceLabVDirection", "SurfaceLab", "World V/Y direction used at creation")
-            sketch.SurfaceLabVDirection = y_axis
-            sketch.addProperty("App::PropertyVector", "SurfaceLabNormal", "SurfaceLab", "World sketch plane normal used at creation")
-            sketch.SurfaceLabNormal = z_axis
-        except Exception:
-            pass
-
         doc.recompute()
         try:
             FreeCADGui.ActiveDocument.setEdit(sketch.Name)
