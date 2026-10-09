@@ -191,6 +191,207 @@ class SurfaceLabBoundarySurfaceCommand:
         }
 
 
+# CATIA Positioned Sketch notes used for this command:
+# CATIA lets the user define a sketch support/reference plane plus the sketch
+# absolute-axis origin and orientation. The horizontal H direction can be made
+# parallel to a selected line and can be swapped/reversed. FreeCAD exposes the
+# same practical result by creating a Sketcher object whose Placement basis is
+# local X/H, local Y/V, local Z/normal.
+
+
+def _selection_subshapes_with_owner():
+    items = []
+    for sel in FreeCADGui.Selection.getSelectionEx('', 0):
+        if sel.SubElementNames:
+            for path in sel.SubElementNames:
+                shape = sel.Object.getSubObject(path)
+                if shape is not None:
+                    items.append((sel.Object, path, shape))
+        elif hasattr(sel.Object, "Shape"):
+            items.append((sel.Object, "", sel.Object.Shape))
+    return items
+
+
+def _point_from_shape(shape):
+    if getattr(shape, "ShapeType", None) == "Vertex":
+        return shape.Point
+    if hasattr(shape, "Point"):
+        return shape.Point
+    vertexes = getattr(shape, "Vertexes", None)
+    if vertexes and len(vertexes) == 1:
+        return vertexes[0].Point
+    return None
+
+
+def _edge_direction(edge):
+    try:
+        if hasattr(edge, "Curve") and hasattr(edge.Curve, "Direction"):
+            return FreeCAD.Vector(edge.Curve.Direction)
+    except Exception:
+        pass
+    try:
+        vertexes = edge.Vertexes
+        if len(vertexes) >= 2:
+            direction = vertexes[-1].Point - vertexes[0].Point
+            if direction.Length > 1e-9:
+                return direction
+    except Exception:
+        pass
+    try:
+        first = edge.firstParameter()
+        last = edge.lastParameter()
+        mid = 0.5 * (first + last)
+        direction = edge.tangentAt(mid)
+        if direction.Length > 1e-9:
+            return direction
+    except Exception:
+        pass
+    return None
+
+
+def _plane_normal(face):
+    try:
+        surface = face.Surface
+        if hasattr(surface, "Axis"):
+            normal = FreeCAD.Vector(surface.Axis)
+            if normal.Length > 1e-9:
+                return normal
+    except Exception:
+        pass
+    try:
+        umin, umax, vmin, vmax = face.ParameterRange
+        u = 0.5 * (umin + umax)
+        v = 0.5 * (vmin + vmax)
+        normal = face.normalAt(u, v)
+        if normal.Length > 1e-9:
+            return normal
+    except Exception:
+        pass
+    return None
+
+
+def _first_positioned_sketch_inputs():
+    """Return (face_owner, face_path, origin, line_direction, plane_normal)."""
+    face_owner = None
+    face_path = ""
+    origin = None
+    line_direction = None
+    plane_normal = None
+
+    for owner, path, shape in _selection_subshapes_with_owner():
+        shape_type = getattr(shape, "ShapeType", None)
+        if shape_type == "Face" and plane_normal is None:
+            normal = _plane_normal(shape)
+            if normal is not None:
+                face_owner = owner
+                face_path = path
+                plane_normal = normal
+        elif shape_type == "Edge" and line_direction is None:
+            line_direction = _edge_direction(shape)
+        elif shape_type == "Vertex" and origin is None:
+            origin = shape.Point
+        elif origin is None:
+            origin = _point_from_shape(shape)
+
+    return face_owner, face_path, origin, line_direction, plane_normal
+
+
+def _make_rotation_from_axes(x_axis, y_axis, z_axis):
+    """Create a FreeCAD Rotation whose local XYZ axes map to the supplied axes."""
+    try:
+        return FreeCAD.Rotation(x_axis, y_axis, z_axis, "XYZ")
+    except Exception:
+        matrix = FreeCAD.Matrix()
+        matrix.A11, matrix.A21, matrix.A31 = x_axis.x, x_axis.y, x_axis.z
+        matrix.A12, matrix.A22, matrix.A32 = y_axis.x, y_axis.y, y_axis.z
+        matrix.A13, matrix.A23, matrix.A33 = z_axis.x, z_axis.y, z_axis.z
+        matrix.A44 = 1.0
+        return FreeCAD.Placement(matrix).Rotation
+
+
+class SurfaceLabPositionedSketchCommand:
+    """Create a CATIA-like positioned sketch from a plane, point, and line."""
+
+    title = "SurfaceLab Positioned Sketch"
+    doc = "Create a sketch whose origin is a selected point and whose horizontal H/X axis follows a selected line on a selected plane."
+    usage = (
+        "Select one planar face/plane, one vertex/point for the origin, and one edge/line for the H/X direction, "
+        "then run the command. The line direction is projected onto the plane."
+    )
+
+    def Activated(self):
+        doc = _active_doc()
+        face_owner, face_path, origin, line_direction, plane_normal = _first_positioned_sketch_inputs()
+        if origin is None or line_direction is None or plane_normal is None:
+            _error(self.title, self.usage)
+            return
+
+        z_axis = FreeCAD.Vector(plane_normal)
+        if z_axis.Length <= 1e-9:
+            FreeCAD.Console.PrintError("SurfaceLab positioned sketch failed: plane normal is zero.\n")
+            return
+        z_axis.normalize()
+
+        # CATIA's H direction is constrained parallel to the selected line. If
+        # the selected line is not exactly on the plane, use its projection onto
+        # the sketch plane so local X lies in the sketch plane.
+        x_axis = FreeCAD.Vector(line_direction)
+        x_axis = x_axis - z_axis.multiply(x_axis.dot(z_axis))
+        if x_axis.Length <= 1e-9:
+            FreeCAD.Console.PrintError("SurfaceLab positioned sketch failed: selected line is normal to the plane, so it cannot define H/X.\n")
+            return
+        x_axis.normalize()
+
+        y_axis = z_axis.cross(x_axis)
+        if y_axis.Length <= 1e-9:
+            FreeCAD.Console.PrintError("SurfaceLab positioned sketch failed: could not compute V/Y axis.\n")
+            return
+        y_axis.normalize()
+        # Recompute X to keep an orthonormal right-handed basis after numeric projection.
+        x_axis = y_axis.cross(z_axis)
+        x_axis.normalize()
+
+        try:
+            sketch = doc.addObject("Sketcher::SketchObject", "PositionedSketch")
+        except Exception as exc:
+            FreeCAD.Console.PrintError("SurfaceLab positioned sketch failed: could not create Sketcher::SketchObject: {}\n".format(exc))
+            return
+
+        sketch.Placement = FreeCAD.Placement(origin, _make_rotation_from_axes(x_axis, y_axis, z_axis))
+        try:
+            sketch.addProperty("App::PropertyString", "SurfaceLabPositioning", "SurfaceLab", "CATIA-like positioned sketch reference summary")
+            sketch.SurfaceLabPositioning = "Origin from selected point; H/X parallel to selected line projected onto selected plane."
+        except Exception:
+            pass
+        try:
+            sketch.addProperty("App::PropertyVector", "SurfaceLabHDirection", "SurfaceLab", "World H/X direction used at creation")
+            sketch.SurfaceLabHDirection = x_axis
+            sketch.addProperty("App::PropertyVector", "SurfaceLabVDirection", "SurfaceLab", "World V/Y direction used at creation")
+            sketch.SurfaceLabVDirection = y_axis
+            sketch.addProperty("App::PropertyVector", "SurfaceLabNormal", "SurfaceLab", "World sketch plane normal used at creation")
+            sketch.SurfaceLabNormal = z_axis
+        except Exception:
+            pass
+
+        doc.recompute()
+        try:
+            FreeCADGui.ActiveDocument.setEdit(sketch.Name)
+        except Exception:
+            pass
+        _message("Created positioned sketch: origin at selected point, H/X parallel to selected line.")
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None
+
+    def GetResources(self):
+        return {
+            'Pixmap': TOOL_ICON,
+            'MenuText': self.title,
+            'ToolTip': "{}<br><br><b>Usage :</b><br>{}".format(self.doc, self.usage),
+        }
+
+
 FreeCADGui.addCommand('SurfaceLab_BSplineFromPoints', SurfaceLabBSplineFromPointsCommand())
 FreeCADGui.addCommand('SurfaceLab_LoftSurface', SurfaceLabLoftSurfaceCommand())
 FreeCADGui.addCommand('SurfaceLab_BoundarySurface', SurfaceLabBoundarySurfaceCommand())
+FreeCADGui.addCommand('SurfaceLab_PositionedSketch', SurfaceLabPositionedSketchCommand())
