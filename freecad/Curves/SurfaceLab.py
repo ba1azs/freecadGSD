@@ -825,6 +825,46 @@ def _is_positioned_sketch(obj):
     return _is_sketch(obj) and (getattr(obj, "Name", "").startswith("PositionedSketch") or hasattr(obj, "SurfaceLabPositioning"))
 
 
+def _is_linked_positioned_sketch(obj):
+    if not _is_sketch(obj):
+        return False
+    try:
+        return bool(getattr(obj, "SurfaceLabLinkedPositionedSketch", False)) and getattr(obj, "SourceSketch", None) is not None
+    except Exception:
+        return False
+
+
+def _selected_linked_positioned_sketch():
+    for obj in FreeCADGui.Selection.getSelection():
+        if _is_linked_positioned_sketch(obj):
+            return obj
+    return None
+
+
+def _selected_positioned_sketch_excluding(excluded):
+    for obj in FreeCADGui.Selection.getSelection():
+        if obj is excluded:
+            continue
+        if _is_positioned_sketch(obj) and not _is_linked_positioned_sketch(obj):
+            return obj
+    return None
+
+
+def _object_display_name(obj):
+    if obj is None:
+        return "not linked"
+    return "{} ({})".format(getattr(obj, "Label", getattr(obj, "Name", "?")), getattr(obj, "Name", "?"))
+
+
+def _qt_modules():
+    try:
+        from PySide import QtCore, QtGui
+        return QtCore, QtGui, QtGui
+    except Exception:
+        from PySide2 import QtCore, QtWidgets
+        return QtCore, QtWidgets, QtWidgets
+
+
 def _selected_body_and_source_sketch():
     source = None
     body = None
@@ -924,7 +964,7 @@ def _linked_positioned_sketches(doc=None, source=None):
         if not _is_sketch(obj):
             continue
         try:
-            if bool(getattr(obj, "SurfaceLabLinkedPositionedSketch", False)) and getattr(obj, "SourceSketch", None) is not None:
+            if _is_linked_positioned_sketch(obj):
                 if source is None or obj.SourceSketch == source:
                     result.append(obj)
         except Exception:
@@ -979,12 +1019,179 @@ def _install_linked_sketch_observer():
             _SURFACELAB_LINKED_SKETCH_OBSERVER = None
 
 
+class _LinkedPositionedSketchDialog:
+    """Small manager for a linked positioned sketch."""
+
+    def __init__(self, linked):
+        self.linked = linked
+        self.QtCore, self.QtGui, self.QtWidgets = _qt_modules()
+        self._build()
+        self.update_labels()
+
+    def _build(self):
+        self.dialog = self.QtWidgets.QDialog()
+        self.dialog.setWindowTitle("Linked Positioned Sketch")
+        try:
+            self.dialog.setModal(False)
+        except Exception:
+            pass
+        layout = self.QtWidgets.QVBoxLayout(self.dialog)
+
+        info = self.QtWidgets.QLabel(
+            "This sketch is a Body-local copy driven by a master PositionedSketch. "
+            "Edit the master; then sync/recompute to update this linked sketch."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        form = self.QtWidgets.QFormLayout()
+        self.linked_label = self.QtWidgets.QLabel("")
+        self.source_label = self.QtWidgets.QLabel("")
+        self.status_label = self.QtWidgets.QLabel("")
+        self.status_label.setWordWrap(True)
+        form.addRow("Linked sketch", self.linked_label)
+        form.addRow("Master source", self.source_label)
+        form.addRow("Status", self.status_label)
+        layout.addLayout(form)
+
+        buttons_layout = self.QtWidgets.QVBoxLayout()
+        self.select_source_btn = self.QtWidgets.QPushButton("Select master source")
+        self.select_linked_btn = self.QtWidgets.QPushButton("Select this linked sketch")
+        self.sync_btn = self.QtWidgets.QPushButton("Sync now from master")
+        self.relink_btn = self.QtWidgets.QPushButton("Relink to currently selected master")
+        self.select_source_btn.clicked.connect(self.select_source)
+        self.select_linked_btn.clicked.connect(self.select_linked)
+        self.sync_btn.clicked.connect(self.sync_now)
+        self.relink_btn.clicked.connect(self.relink_to_selection)
+        for button in (self.select_source_btn, self.select_linked_btn, self.sync_btn, self.relink_btn):
+            buttons_layout.addWidget(button)
+        layout.addLayout(buttons_layout)
+
+        hint = self.QtWidgets.QLabel(
+            "Relink: select another normal PositionedSketch in the tree/3D view, then press Relink. "
+            "Do not manually edit linked copies; edit the master source instead."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        close_buttons = self.QtWidgets.QDialogButtonBox(self.QtWidgets.QDialogButtonBox.Close)
+        close_buttons.rejected.connect(self.dialog.reject)
+        try:
+            close_buttons.button(self.QtWidgets.QDialogButtonBox.Close).clicked.connect(self.dialog.reject)
+        except Exception:
+            pass
+        layout.addWidget(close_buttons)
+
+    def update_labels(self, status=""):
+        source = getattr(self.linked, "SourceSketch", None)
+        self.linked_label.setText(_object_display_name(self.linked))
+        self.source_label.setText(_object_display_name(source))
+        if not status:
+            if source is None:
+                status = "No source stored. Select a master PositionedSketch and press Relink."
+            else:
+                status = "Linked to {}.".format(getattr(source, "Label", source.Name))
+        self.status_label.setText(status)
+
+    def select_source(self):
+        source = getattr(self.linked, "SourceSketch", None)
+        if source is None:
+            self.update_labels("No source sketch stored on this linked sketch.")
+            return
+        try:
+            FreeCADGui.Selection.clearSelection()
+            FreeCADGui.Selection.addSelection(source)
+            self.update_labels("Selected master source: {}.".format(source.Label))
+        except Exception as exc:
+            self.update_labels("Could not select source: {}".format(exc))
+
+    def select_linked(self):
+        try:
+            FreeCADGui.Selection.clearSelection()
+            FreeCADGui.Selection.addSelection(self.linked)
+            self.update_labels("Selected linked sketch: {}.".format(self.linked.Label))
+        except Exception as exc:
+            self.update_labels("Could not select linked sketch: {}".format(exc))
+
+    def sync_now(self):
+        source = getattr(self.linked, "SourceSketch", None)
+        if source is None:
+            self.update_labels("No source to sync from.")
+            return
+        try:
+            if _copy_sketch_contents(source, self.linked):
+                if self.linked.Document is not None:
+                    self.linked.Document.recompute()
+                self.update_labels("Synced from {}.".format(source.Label))
+            else:
+                self.update_labels("Nothing synced.")
+        except Exception as exc:
+            self.update_labels("Sync failed: {}".format(exc))
+
+    def relink_to_selection(self):
+        source = _selected_positioned_sketch_excluding(self.linked)
+        if source is None:
+            self.update_labels("Select a normal/master PositionedSketch first, then press Relink.")
+            return
+        try:
+            _add_link_properties(self.linked, source)
+            _copy_sketch_contents(source, self.linked)
+            if self.linked.Document is not None:
+                self.linked.Document.recompute()
+            self.update_labels("Relinked and synced from {}.".format(source.Label))
+        except Exception as exc:
+            self.update_labels("Relink failed: {}".format(exc))
+
+    def show(self):
+        self.dialog.show()
+        try:
+            self.dialog.raise_()
+            self.dialog.activateWindow()
+        except Exception:
+            pass
+
+
+_SURFACELAB_LINKED_SKETCH_DIALOG = None
+
+
+class SurfaceLabManageLinkedPositionedSketchCommand:
+    title = "SurfaceLab Manage Linked Positioned Sketch"
+    doc = "Show and edit the master SourceSketch link of a linked positioned sketch."
+    usage = "Select a LinkedPositionedSketch, then run the command."
+
+    def Activated(self):
+        linked = _selected_linked_positioned_sketch()
+        if linked is None:
+            _error(self.title, self.usage)
+            return
+        if getattr(FreeCAD, "GuiUp", False):
+            try:
+                global _SURFACELAB_LINKED_SKETCH_DIALOG
+                _SURFACELAB_LINKED_SKETCH_DIALOG = _LinkedPositionedSketchDialog(linked)
+                _SURFACELAB_LINKED_SKETCH_DIALOG.show()
+                return
+            except Exception as exc:
+                FreeCAD.Console.PrintWarning("SurfaceLab linked sketch dialog unavailable: {}\n".format(exc))
+        source = getattr(linked, "SourceSketch", None)
+        _message("{} is linked to {}.".format(linked.Label, _object_display_name(source)))
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None
+
+    def GetResources(self):
+        return {'Pixmap': TOOL_ICON, 'MenuText': self.title, 'ToolTip': "{}<br><br><b>Usage :</b><br>{}".format(self.doc, self.usage)}
+
+
 class SurfaceLabCreateLinkedPositionedSketchCommand:
     title = "SurfaceLab Linked Positioned Sketch"
     doc = "Create a Body-local sketch linked to a master positioned sketch."
     usage = "Select a master PositionedSketch and a target Body, or activate a Body and select the master sketch, then run the command."
 
     def Activated(self):
+        linked = _selected_linked_positioned_sketch()
+        if linked is not None:
+            SurfaceLabManageLinkedPositionedSketchCommand().Activated()
+            return
         doc = _active_doc()
         source, body = _selected_body_and_source_sketch()
         if source is None:
@@ -1036,5 +1243,6 @@ FreeCADGui.addCommand('SurfaceLab_LoftSurface', SurfaceLabLoftSurfaceCommand())
 FreeCADGui.addCommand('SurfaceLab_BoundarySurface', SurfaceLabBoundarySurfaceCommand())
 FreeCADGui.addCommand('SurfaceLab_PositionedSketch', SurfaceLabPositionedSketchCommand())
 FreeCADGui.addCommand('SurfaceLab_CreateLinkedPositionedSketch', SurfaceLabCreateLinkedPositionedSketchCommand())
+FreeCADGui.addCommand('SurfaceLab_ManageLinkedPositionedSketch', SurfaceLabManageLinkedPositionedSketchCommand())
 FreeCADGui.addCommand('SurfaceLab_SyncLinkedPositionedSketches', SurfaceLabSyncLinkedPositionedSketchesCommand())
 _install_linked_sketch_observer()
