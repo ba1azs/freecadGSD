@@ -24,6 +24,8 @@ POSITIONED_SKETCH_ICON = os.path.join(ICONPATH, "surfacelab_positioned_sketch.sv
 LINKED_POSITIONED_SKETCH_ICON = os.path.join(ICONPATH, "surfacelab_linked_positioned_sketch.svg")
 MANAGE_LINKED_SKETCH_ICON = os.path.join(ICONPATH, "surfacelab_manage_linked_sketch.svg")
 SYNC_LINKED_SKETCH_ICON = os.path.join(ICONPATH, "surfacelab_sync_linked_sketches.svg")
+SKETCH_VISIBLE_SPACE_ICON = os.path.join(ICONPATH, "surfacelab_switch_visible_space.svg")
+SKETCH_ISOLATE_ICON = os.path.join(ICONPATH, "surfacelab_isolate_sketch_geometry.svg")
 
 
 def _active_doc():
@@ -1288,6 +1290,194 @@ class SurfaceLabSyncLinkedPositionedSketchesCommand:
         return {'Pixmap': SYNC_LINKED_SKETCH_ICON, 'MenuText': self.title, 'ToolTip': "{}<br><br><b>Usage :</b><br>{}".format(self.doc, self.usage)}
 
 
+_SKETCH_VISIBLE_SPACE_STATES = {}
+
+
+def _active_or_selected_sketch():
+    try:
+        in_edit = FreeCADGui.ActiveDocument.getInEdit()
+        if _is_sketch(in_edit):
+            return in_edit
+    except Exception:
+        pass
+    for obj in FreeCADGui.Selection.getSelection():
+        if _is_sketch(obj):
+            return obj
+    return None
+
+
+def _view_object(obj):
+    try:
+        return obj.ViewObject
+    except Exception:
+        return None
+
+
+def _external_shape(owner, subname):
+    try:
+        if owner is not None and subname:
+            shape = owner.getSubObject(subname)
+            if shape is not None:
+                return shape
+    except Exception:
+        pass
+    try:
+        if owner is not None and hasattr(owner, "Shape"):
+            return owner.Shape
+    except Exception:
+        pass
+    return None
+
+
+def _geometry_from_edge_in_sketch(edge, sketch):
+    try:
+        curve = edge.Curve.copy()
+    except Exception:
+        return None
+    try:
+        first = edge.FirstParameter
+        last = edge.LastParameter
+        if hasattr(curve, "trim"):
+            curve = curve.trim(first, last)
+    except Exception:
+        pass
+    try:
+        curve.transform(sketch.Placement.inverse().toMatrix())
+    except Exception:
+        pass
+    return curve
+
+
+def _geometry_from_vertex_in_sketch(vertex, sketch):
+    try:
+        point = sketch.Placement.inverse().multVec(vertex.Point)
+        return Part.Point(point)
+    except Exception:
+        return None
+
+
+def _isolate_sketch_external_geometry(sketch, delete_external=True):
+    if sketch is None or not _is_sketch(sketch):
+        return 0
+    added = 0
+    externals = list(getattr(sketch, "ExternalGeometry", []) or [])
+    for owner, subnames in externals:
+        for subname in subnames:
+            shape = _external_shape(owner, subname)
+            if shape is None:
+                continue
+            shape_type = getattr(shape, "ShapeType", None)
+            geometries = []
+            if shape_type == "Edge":
+                geom = _geometry_from_edge_in_sketch(shape, sketch)
+                if geom is not None:
+                    geometries.append(geom)
+            elif shape_type == "Vertex":
+                geom = _geometry_from_vertex_in_sketch(shape, sketch)
+                if geom is not None:
+                    geometries.append(geom)
+            else:
+                for edge in getattr(shape, "Edges", []) or []:
+                    geom = _geometry_from_edge_in_sketch(edge, sketch)
+                    if geom is not None:
+                        geometries.append(geom)
+                for vertex in getattr(shape, "Vertexes", []) or []:
+                    geom = _geometry_from_vertex_in_sketch(vertex, sketch)
+                    if geom is not None:
+                        geometries.append(geom)
+            for geom in geometries:
+                try:
+                    sketch.addGeometry(geom, False)
+                    added += 1
+                except Exception as exc:
+                    FreeCAD.Console.PrintWarning("SurfaceLab: could not isolate sketch geometry {}: {}\n".format(subname, exc))
+    if delete_external:
+        try:
+            for index in reversed(range(len(externals))):
+                sketch.delExternal(index)
+        except Exception as exc:
+            FreeCAD.Console.PrintWarning("SurfaceLab: isolated geometry but could not remove all external links: {}\n".format(exc))
+    return added
+
+
+class SurfaceLabSwitchVisibleSpaceCommand:
+    title = "SurfaceLab Switch Visible Space"
+    doc = "Toggle CATIA-like sketch visible space: hide/show the 3D model around the active sketch."
+    usage = "Edit or select a sketch, then run the command. Run again to restore previous visibility."
+
+    def Activated(self):
+        sketch = _active_or_selected_sketch()
+        if sketch is None:
+            _error(self.title, self.usage)
+            return
+        doc = sketch.Document or FreeCAD.ActiveDocument
+        key = (doc.Name if doc else "", sketch.Name)
+        if key in _SKETCH_VISIBLE_SPACE_STATES:
+            states = _SKETCH_VISIBLE_SPACE_STATES.pop(key)
+            for name, visible in states.items():
+                obj = doc.getObject(name) if doc is not None else None
+                vo = _view_object(obj) if obj is not None else None
+                if vo is not None:
+                    try:
+                        vo.Visibility = visible
+                    except Exception:
+                        pass
+            _message("Restored visible space around {}.".format(sketch.Label))
+            return
+        states = {}
+        hidden = 0
+        for obj in list(getattr(doc, "Objects", []) or []):
+            if obj == sketch:
+                continue
+            vo = _view_object(obj)
+            if vo is None:
+                continue
+            try:
+                states[obj.Name] = bool(vo.Visibility)
+                if vo.Visibility:
+                    vo.Visibility = False
+                    hidden += 1
+            except Exception:
+                pass
+        _SKETCH_VISIBLE_SPACE_STATES[key] = states
+        try:
+            sketch.ViewObject.Visibility = True
+        except Exception:
+            pass
+        _message("Switched visible space for {}; hidden {} object(s). Run again to restore.".format(sketch.Label, hidden))
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None
+
+    def GetResources(self):
+        return {'Pixmap': SKETCH_VISIBLE_SPACE_ICON, 'MenuText': self.title, 'ToolTip': "{}<br><br><b>Usage :</b><br>{}".format(self.doc, self.usage)}
+
+
+class SurfaceLabIsolateSketchGeometryCommand:
+    title = "SurfaceLab Isolate Sketch Projections"
+    doc = "Copy projected/external sketch geometry into the sketch as normal editable geometry, then remove the external links."
+    usage = "Edit or select a sketch containing projected external geometry, then run the command."
+
+    def Activated(self):
+        sketch = _active_or_selected_sketch()
+        if sketch is None:
+            _error(self.title, self.usage)
+            return
+        try:
+            added = _isolate_sketch_external_geometry(sketch, delete_external=True)
+            if sketch.Document is not None:
+                sketch.Document.recompute()
+            _message("Isolated {} projected geometries in {}.".format(added, sketch.Label))
+        except Exception as exc:
+            FreeCAD.Console.PrintError("SurfaceLab isolate sketch projections failed: {}\n".format(exc))
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None
+
+    def GetResources(self):
+        return {'Pixmap': SKETCH_ISOLATE_ICON, 'MenuText': self.title, 'ToolTip': "{}<br><br><b>Usage :</b><br>{}".format(self.doc, self.usage)}
+
+
 FreeCADGui.addCommand('SurfaceLab_BSplineFromPoints', SurfaceLabBSplineFromPointsCommand())
 FreeCADGui.addCommand('SurfaceLab_LoftSurface', SurfaceLabLoftSurfaceCommand())
 FreeCADGui.addCommand('SurfaceLab_BoundarySurface', SurfaceLabBoundarySurfaceCommand())
@@ -1295,4 +1485,6 @@ FreeCADGui.addCommand('SurfaceLab_PositionedSketch', SurfaceLabPositionedSketchC
 FreeCADGui.addCommand('SurfaceLab_CreateLinkedPositionedSketch', SurfaceLabCreateLinkedPositionedSketchCommand())
 FreeCADGui.addCommand('SurfaceLab_ManageLinkedPositionedSketch', SurfaceLabManageLinkedPositionedSketchCommand())
 FreeCADGui.addCommand('SurfaceLab_SyncLinkedPositionedSketches', SurfaceLabSyncLinkedPositionedSketchesCommand())
+FreeCADGui.addCommand('SurfaceLab_SwitchVisibleSpace', SurfaceLabSwitchVisibleSpaceCommand())
+FreeCADGui.addCommand('SurfaceLab_IsolateSketchGeometry', SurfaceLabIsolateSketchGeometryCommand())
 _install_linked_sketch_observer()

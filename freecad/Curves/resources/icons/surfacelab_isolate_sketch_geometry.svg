@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <defs><linearGradient id="p" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffe27a"/><stop offset="1" stop-color="#d99800"/></linearGradient></defs>
+  <path d="M9 43 L27 18 L55 25 L37 52 Z" fill="url(#p)" stroke="#704900" stroke-width="2"/>
+  <path d="M18 39 L48 32" stroke="#9b59b6" stroke-width="5" stroke-linecap="round" stroke-dasharray="5 4"/>
+  <path d="M20 48 L50 41" stroke="#222" stroke-width="4" stroke-linecap="round"/>
+  <path d="M29 26 L24 56" stroke="#222" stroke-width="3" stroke-linecap="round"/>
+  <path d="M42 20 L37 50" stroke="#222" stroke-width="3" stroke-linecap="round"/>
+  <path d="M16 13 L50 13" stroke="#1c4fc4" stroke-width="4" stroke-linecap="round"/>
+  <path d="M45 8 L55 13 L45 18 Z" fill="#1c4fc4"/>
+  <path d="M14 7 L14 19" stroke="#e51b23" stroke-width="4" stroke-linecap="round"/>
+  <text x="6" y="62" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#333">ISO</text>
+</svg>

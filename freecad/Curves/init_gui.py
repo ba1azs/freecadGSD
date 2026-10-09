@@ -188,7 +188,7 @@ class CurvesWorkbench(Gui.Workbench):
                     "ReflectLines", "MultiLoft", "Curves_BlendSurf2", "Curves_BlendSolid",
                     "Curves_FlattenFace", "Curves_RotationSweep", 'Curves_SurfaceAnalysis',
                     'Curves_DraftAnalysis', "Curve_TruncateExtendCmd", "Curves_WaterlineCurves",]
-        surfacelablist = ["SurfaceLab_PositionedSketch", "SurfaceLab_CreateLinkedPositionedSketch", "SurfaceLab_ManageLinkedPositionedSketch", "SurfaceLab_SyncLinkedPositionedSketches", "SurfaceLab_BSplineFromPoints", "SurfaceLab_LoftSurface", "SurfaceLab_BoundarySurface"]  # ,"Curves_ProfileSupport", "Curves_Sweep2Rails"]
+        surfacelablist = ["SurfaceLab_PositionedSketch", "SurfaceLab_CreateLinkedPositionedSketch", "SurfaceLab_ManageLinkedPositionedSketch", "SurfaceLab_SyncLinkedPositionedSketches", "SurfaceLab_SwitchVisibleSpace", "SurfaceLab_IsolateSketchGeometry", "SurfaceLab_BSplineFromPoints", "SurfaceLab_LoftSurface", "SurfaceLab_BoundarySurface"]  # ,"Curves_ProfileSupport", "Curves_Sweep2Rails"]
         misclist = ["GeomInfo", "extract", "solid", "pasteSVG", "to_console", "Curves_adjacent_faces",
                     "Curves_bspline_to_console"]
 
