@@ -817,7 +817,224 @@ class SurfaceLabPositionedSketchCommand:
         }
 
 
+def _is_sketch(obj):
+    return getattr(obj, "TypeId", "") == "Sketcher::SketchObject"
+
+
+def _is_positioned_sketch(obj):
+    return _is_sketch(obj) and (getattr(obj, "Name", "").startswith("PositionedSketch") or hasattr(obj, "SurfaceLabPositioning"))
+
+
+def _selected_body_and_source_sketch():
+    source = None
+    body = None
+    for sel in FreeCADGui.Selection.getSelectionEx('', 0):
+        obj = getattr(sel, "Object", None)
+        if obj is None:
+            continue
+        if _is_positioned_sketch(obj) and source is None:
+            source = obj
+        elif getattr(obj, "TypeId", "") == "PartDesign::Body" and body is None:
+            body = obj
+    if body is None:
+        try:
+            active = FreeCADGui.ActiveDocument.ActiveView.getActiveObject("pdbody")
+            if getattr(active, "TypeId", "") == "PartDesign::Body":
+                body = active
+        except Exception:
+            pass
+    return source, body
+
+
+def _add_link_properties(target, source):
+    try:
+        if not hasattr(target, "SourceSketch"):
+            target.addProperty("App::PropertyLink", "SourceSketch", "SurfaceLab", "Master positioned sketch driving this linked copy")
+        target.SourceSketch = source
+    except Exception:
+        pass
+    try:
+        if not hasattr(target, "SurfaceLabLinkedPositionedSketch"):
+            target.addProperty("App::PropertyBool", "SurfaceLabLinkedPositionedSketch", "SurfaceLab", "True if this sketch is synchronized from SourceSketch")
+        target.SurfaceLabLinkedPositionedSketch = True
+    except Exception:
+        pass
+
+
+def _copy_sketch_contents(source, target):
+    if source is None or target is None or source == target:
+        return False
+    try:
+        target.deleteAllConstraints()
+    except Exception:
+        try:
+            for index in reversed(range(len(target.Constraints))):
+                target.delConstraint(index)
+        except Exception:
+            pass
+    try:
+        target.deleteAllGeometry()
+    except Exception:
+        try:
+            for index in reversed(range(len(target.Geometry))):
+                target.delGeometry(index)
+        except Exception:
+            pass
+
+    for index, geometry in enumerate(source.Geometry):
+        try:
+            copied = geometry.copy()
+        except Exception:
+            copied = geometry
+        construction = False
+        try:
+            construction = bool(source.getConstruction(index))
+        except Exception:
+            pass
+        target.addGeometry(copied, construction)
+
+    for constraint in source.Constraints:
+        try:
+            target.addConstraint(constraint)
+        except Exception as exc:
+            FreeCAD.Console.PrintWarning("SurfaceLab: skipped linked sketch constraint {}: {}\n".format(constraint, exc))
+
+    target.Placement = source.Placement
+    for name in ("SurfaceLabHDirection", "SurfaceLabVDirection", "SurfaceLabNormal", "SurfaceLabPositioning"):
+        try:
+            if hasattr(source, name):
+                if not hasattr(target, name):
+                    value = getattr(source, name)
+                    if name == "SurfaceLabPositioning":
+                        target.addProperty("App::PropertyString", name, "SurfaceLab", "CATIA-like positioned sketch reference summary")
+                    else:
+                        target.addProperty("App::PropertyVector", name, "SurfaceLab", "Positioned sketch axis copied from source")
+                setattr(target, name, getattr(source, name))
+        except Exception:
+            pass
+    return True
+
+
+def _linked_positioned_sketches(doc=None, source=None):
+    doc = doc or FreeCAD.ActiveDocument
+    if doc is None:
+        return []
+    result = []
+    for obj in doc.Objects:
+        if not _is_sketch(obj):
+            continue
+        try:
+            if bool(getattr(obj, "SurfaceLabLinkedPositionedSketch", False)) and getattr(obj, "SourceSketch", None) is not None:
+                if source is None or obj.SourceSketch == source:
+                    result.append(obj)
+        except Exception:
+            pass
+    return result
+
+
+def _sync_linked_positioned_sketches(doc=None, source=None):
+    count = 0
+    for target in _linked_positioned_sketches(doc, source):
+        src = getattr(target, "SourceSketch", None)
+        if src is not None and _copy_sketch_contents(src, target):
+            count += 1
+    return count
+
+
+class _SurfaceLabLinkedSketchObserver:
+    syncing = False
+
+    def _maybe_sync(self, obj):
+        if self.syncing or not _is_positioned_sketch(obj):
+            return
+        try:
+            linked = _linked_positioned_sketches(obj.Document, obj)
+            if not linked:
+                return
+            self.syncing = True
+            _sync_linked_positioned_sketches(obj.Document, obj)
+        except Exception as exc:
+            FreeCAD.Console.PrintWarning("SurfaceLab linked sketch auto-sync skipped: {}\n".format(exc))
+        finally:
+            self.syncing = False
+
+    def slotChangedObject(self, obj, prop):
+        if prop in ("Geometry", "Constraints", "Placement", "Support", "MapMode", "AttachmentOffset"):
+            self._maybe_sync(obj)
+
+    def slotRecomputedObject(self, obj):
+        self._maybe_sync(obj)
+
+
+_SURFACELAB_LINKED_SKETCH_OBSERVER = None
+
+
+def _install_linked_sketch_observer():
+    global _SURFACELAB_LINKED_SKETCH_OBSERVER
+    if _SURFACELAB_LINKED_SKETCH_OBSERVER is None:
+        try:
+            _SURFACELAB_LINKED_SKETCH_OBSERVER = _SurfaceLabLinkedSketchObserver()
+            FreeCAD.addDocumentObserver(_SURFACELAB_LINKED_SKETCH_OBSERVER)
+        except Exception:
+            _SURFACELAB_LINKED_SKETCH_OBSERVER = None
+
+
+class SurfaceLabCreateLinkedPositionedSketchCommand:
+    title = "SurfaceLab Linked Positioned Sketch"
+    doc = "Create a Body-local sketch linked to a master positioned sketch."
+    usage = "Select a master PositionedSketch and a target Body, or activate a Body and select the master sketch, then run the command."
+
+    def Activated(self):
+        doc = _active_doc()
+        source, body = _selected_body_and_source_sketch()
+        if source is None:
+            _error(self.title, self.usage)
+            return
+        try:
+            linked = doc.addObject("Sketcher::SketchObject", "LinkedPositionedSketch")
+            linked.Label = "Linked " + getattr(source, "Label", source.Name)
+            _copy_sketch_contents(source, linked)
+            _add_link_properties(linked, source)
+            if body is not None:
+                try:
+                    body.addObject(linked)
+                except Exception as exc:
+                    FreeCAD.Console.PrintWarning("SurfaceLab: could not move linked sketch into Body: {}\n".format(exc))
+            doc.recompute()
+            _install_linked_sketch_observer()
+            _message("Created linked positioned sketch{} from {}.".format(" in " + body.Label if body is not None else "", source.Label))
+        except Exception as exc:
+            FreeCAD.Console.PrintError("SurfaceLab linked positioned sketch failed: {}\n".format(exc))
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None
+
+    def GetResources(self):
+        return {'Pixmap': TOOL_ICON, 'MenuText': self.title, 'ToolTip': "{}<br><br><b>Usage :</b><br>{}".format(self.doc, self.usage)}
+
+
+class SurfaceLabSyncLinkedPositionedSketchesCommand:
+    title = "SurfaceLab Sync Linked Positioned Sketches"
+    doc = "Synchronize all linked positioned sketches from their master SourceSketch."
+    usage = "Run after editing a master sketch if linked copies did not update automatically."
+
+    def Activated(self):
+        count = _sync_linked_positioned_sketches(FreeCAD.ActiveDocument)
+        if FreeCAD.ActiveDocument is not None:
+            FreeCAD.ActiveDocument.recompute()
+        _message("Synchronized {} linked positioned sketch(es).".format(count))
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None
+
+    def GetResources(self):
+        return {'Pixmap': TOOL_ICON, 'MenuText': self.title, 'ToolTip': "{}<br><br><b>Usage :</b><br>{}".format(self.doc, self.usage)}
+
+
 FreeCADGui.addCommand('SurfaceLab_BSplineFromPoints', SurfaceLabBSplineFromPointsCommand())
 FreeCADGui.addCommand('SurfaceLab_LoftSurface', SurfaceLabLoftSurfaceCommand())
 FreeCADGui.addCommand('SurfaceLab_BoundarySurface', SurfaceLabBoundarySurfaceCommand())
 FreeCADGui.addCommand('SurfaceLab_PositionedSketch', SurfaceLabPositionedSketchCommand())
+FreeCADGui.addCommand('SurfaceLab_CreateLinkedPositionedSketch', SurfaceLabCreateLinkedPositionedSketchCommand())
+FreeCADGui.addCommand('SurfaceLab_SyncLinkedPositionedSketches', SurfaceLabSyncLinkedPositionedSketchesCommand())
+_install_linked_sketch_observer()
