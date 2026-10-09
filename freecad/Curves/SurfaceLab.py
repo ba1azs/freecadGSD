@@ -296,6 +296,30 @@ def _first_positioned_sketch_inputs():
     return face_owner, face_path, origin, line_direction, plane_normal
 
 
+def _selected_positioned_sketch():
+    for sel in FreeCADGui.Selection.getSelectionEx('', 0):
+        obj = getattr(sel, "Object", None)
+        if obj is None:
+            continue
+        if getattr(obj, "TypeId", "") == "Sketcher::SketchObject" and getattr(obj, "Name", "").startswith("PositionedSketch"):
+            return obj
+        if getattr(obj, "TypeId", "") == "Sketcher::SketchObject" and hasattr(obj, "SurfaceLabPositioning"):
+            return obj
+    return None
+
+
+def _placement_axes(sketch):
+    placement = sketch.Placement
+    rotation = placement.Rotation
+    x_axis = rotation.multVec(FreeCAD.Vector(1, 0, 0))
+    y_axis = rotation.multVec(FreeCAD.Vector(0, 1, 0))
+    z_axis = rotation.multVec(FreeCAD.Vector(0, 0, 1))
+    for axis in (x_axis, y_axis, z_axis):
+        if axis.Length > 1e-9:
+            axis.normalize()
+    return FreeCAD.Vector(placement.Base), x_axis, y_axis, z_axis
+
+
 def _make_rotation_from_axes(x_axis, y_axis, z_axis):
     """Create a FreeCAD Rotation whose local XYZ axes map to the supplied axes."""
     try:
@@ -316,26 +340,41 @@ def _object_label(owner, path):
     return label
 
 
-def _create_positioned_sketch(doc, origin, line_direction, plane_normal, reverse_h=False, reverse_v=False, swap_hv=False):
+def _create_positioned_sketch(
+    doc,
+    origin,
+    line_direction,
+    plane_normal,
+    reverse_h=False,
+    reverse_v=False,
+    swap_hv=False,
+    existing_sketch=None,
+    v_direction=None,
+):
     z_axis = FreeCAD.Vector(plane_normal)
     if z_axis.Length <= 1e-9:
         raise ValueError("plane normal is zero")
     z_axis.normalize()
 
-    # CATIA's H direction is constrained parallel to the selected line. If the
-    # selected line is not exactly on the plane, use its projection onto the
-    # sketch plane so local X lies in the sketch plane.
     x_axis = FreeCAD.Vector(line_direction)
     x_axis = x_axis - FreeCAD.Vector(z_axis).multiply(x_axis.dot(z_axis))
     if x_axis.Length <= 1e-9:
         raise ValueError("selected line is normal to the plane, so it cannot define H/X")
     x_axis.normalize()
 
-    y_axis = z_axis.cross(x_axis)
+    if v_direction is None:
+        y_axis = z_axis.cross(x_axis)
+    else:
+        y_axis = FreeCAD.Vector(v_direction)
+        y_axis = y_axis - FreeCAD.Vector(z_axis).multiply(y_axis.dot(z_axis))
+        y_axis = y_axis - FreeCAD.Vector(x_axis).multiply(y_axis.dot(x_axis))
     if y_axis.Length <= 1e-9:
         raise ValueError("could not compute V/Y axis")
     y_axis.normalize()
     x_axis = y_axis.cross(z_axis)
+    if x_axis.dot(line_direction) < 0:
+        x_axis = x_axis.multiply(-1.0)
+        y_axis = y_axis.multiply(-1.0)
     x_axis.normalize()
 
     if reverse_h:
@@ -345,9 +384,6 @@ def _create_positioned_sketch(doc, origin, line_direction, plane_normal, reverse
     if swap_hv:
         x_axis, y_axis = y_axis, x_axis
 
-    # Keep the basis orthogonal. If a single direction was reversed or H/V were
-    # swapped, this deliberately flips the sketch side like CATIA's reverse
-    # direction controls can do.
     z_axis = x_axis.cross(y_axis)
     if z_axis.Length <= 1e-9:
         raise ValueError("invalid H/V orientation")
@@ -355,23 +391,30 @@ def _create_positioned_sketch(doc, origin, line_direction, plane_normal, reverse
     y_axis = z_axis.cross(x_axis)
     y_axis.normalize()
 
-    try:
-        sketch = doc.addObject("Sketcher::SketchObject", "PositionedSketch")
-    except Exception as exc:
-        raise RuntimeError("could not create Sketcher::SketchObject: {}".format(exc))
+    if existing_sketch is None:
+        try:
+            sketch = doc.addObject("Sketcher::SketchObject", "PositionedSketch")
+        except Exception as exc:
+            raise RuntimeError("could not create Sketcher::SketchObject: {}".format(exc))
+    else:
+        sketch = existing_sketch
 
     sketch.Placement = FreeCAD.Placement(origin, _make_rotation_from_axes(x_axis, y_axis, z_axis))
     try:
-        sketch.addProperty("App::PropertyString", "SurfaceLabPositioning", "SurfaceLab", "CATIA-like positioned sketch reference summary")
+        if not hasattr(sketch, "SurfaceLabPositioning"):
+            sketch.addProperty("App::PropertyString", "SurfaceLabPositioning", "SurfaceLab", "CATIA-like positioned sketch reference summary")
         sketch.SurfaceLabPositioning = "Origin from selected point; H/X parallel to selected line projected onto selected plane."
     except Exception:
         pass
     try:
-        sketch.addProperty("App::PropertyVector", "SurfaceLabHDirection", "SurfaceLab", "World H/X direction used at creation")
+        if not hasattr(sketch, "SurfaceLabHDirection"):
+            sketch.addProperty("App::PropertyVector", "SurfaceLabHDirection", "SurfaceLab", "World H/X direction used at creation")
         sketch.SurfaceLabHDirection = x_axis
-        sketch.addProperty("App::PropertyVector", "SurfaceLabVDirection", "SurfaceLab", "World V/Y direction used at creation")
+        if not hasattr(sketch, "SurfaceLabVDirection"):
+            sketch.addProperty("App::PropertyVector", "SurfaceLabVDirection", "SurfaceLab", "World V/Y direction used at creation")
         sketch.SurfaceLabVDirection = y_axis
-        sketch.addProperty("App::PropertyVector", "SurfaceLabNormal", "SurfaceLab", "World sketch plane normal used at creation")
+        if not hasattr(sketch, "SurfaceLabNormal"):
+            sketch.addProperty("App::PropertyVector", "SurfaceLabNormal", "SurfaceLab", "World sketch plane normal used at creation")
         sketch.SurfaceLabNormal = z_axis
     except Exception:
         pass
@@ -381,15 +424,22 @@ def _create_positioned_sketch(doc, origin, line_direction, plane_normal, reverse
 class _PositionedSketchDialog:
     """Small CATIA-like Sketch Positioning popup."""
 
-    def __init__(self, command):
+    def __init__(self, command, sketch=None):
         self.command = command
+        self.sketch = sketch
         self.face_owner = None
         self.face_path = ""
         self.origin = None
         self.line_direction = None
+        self.v_direction = None
         self.plane_normal = None
+        if self.sketch is not None:
+            self.origin, self.line_direction, self.v_direction, self.plane_normal = _placement_axes(self.sketch)
         self._build()
-        self.read_selection()
+        if self.sketch is None:
+            self.read_selection()
+        else:
+            self.update_labels()
 
     def _qt_modules(self):
         try:
@@ -402,10 +452,11 @@ class _PositionedSketchDialog:
     def _build(self):
         self.QtCore, self.QtGui, self.QtWidgets = self._qt_modules()
         self.dialog = self.QtWidgets.QDialog()
-        self.dialog.setWindowTitle("Positioned Sketch")
+        self.dialog.setWindowTitle("Edit Positioned Sketch" if self.sketch is not None else "Positioned Sketch")
         layout = self.QtWidgets.QVBoxLayout(self.dialog)
 
         info = self.QtWidgets.QLabel(
+            "Edit CATIA-like sketch positioning: change H/V direction or read a new support/origin/H selection." if self.sketch is not None else
             "Create a CATIA-like positioned sketch: choose support plane, origin, and H direction."
         )
         info.setWordWrap(True)
@@ -448,12 +499,13 @@ class _PositionedSketchDialog:
         buttons.rejected.connect(self.dialog.reject)
         layout.addWidget(buttons)
 
-    def read_selection(self):
-        self.face_owner, self.face_path, self.origin, self.line_direction, self.plane_normal = _first_positioned_sketch_inputs()
+    def update_labels(self):
         if self.plane_normal is None:
             self.support_label.setText("not selected")
-        else:
+        elif self.face_owner is not None:
             self.support_label.setText(_object_label(self.face_owner, self.face_path))
+        else:
+            self.support_label.setText("current sketch plane")
         if self.origin is None:
             self.origin_label.setText("not selected")
         else:
@@ -465,6 +517,19 @@ class _PositionedSketchDialog:
             if direction.Length > 1e-9:
                 direction.normalize()
             self.direction_label.setText("H parallel to {:.3f}, {:.3f}, {:.3f}".format(direction.x, direction.y, direction.z))
+
+    def read_selection(self):
+        face_owner, face_path, origin, line_direction, plane_normal = _first_positioned_sketch_inputs()
+        if plane_normal is not None:
+            self.face_owner = face_owner
+            self.face_path = face_path
+            self.plane_normal = plane_normal
+        if origin is not None:
+            self.origin = origin
+        if line_direction is not None:
+            self.line_direction = line_direction
+            self.v_direction = None
+        self.update_labels()
 
     def accept(self):
         if self.origin is None or self.line_direction is None or self.plane_normal is None:
@@ -483,6 +548,8 @@ class _PositionedSketchDialog:
                 self.reverse_h.isChecked(),
                 self.reverse_v.isChecked(),
                 self.swap_hv.isChecked(),
+                existing_sketch=self.sketch,
+                v_direction=self.v_direction,
             )
         except Exception as exc:
             self.QtWidgets.QMessageBox.critical(self.dialog, "Positioned Sketch", str(exc))
@@ -492,7 +559,7 @@ class _PositionedSketchDialog:
             FreeCADGui.ActiveDocument.setEdit(sketch.Name)
         except Exception:
             pass
-        _message("Created positioned sketch from popup.")
+        _message(("Updated" if self.sketch is not None else "Created") + " positioned sketch from popup.")
         self.dialog.accept()
 
     def exec_(self):
@@ -512,7 +579,7 @@ class SurfaceLabPositionedSketchCommand:
     def Activated(self):
         if getattr(FreeCAD, "GuiUp", False):
             try:
-                dialog = _PositionedSketchDialog(self)
+                dialog = _PositionedSketchDialog(self, _selected_positioned_sketch())
                 dialog.exec_()
                 return
             except Exception as exc:
